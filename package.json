@@ -1,7 +1,7 @@
 {
   "name": "bolt-js-getting-started-app",
   "version": "1.0.0",
-  "description": "Getting Started ⚡️ Bolt for JavaScript",
+  "description": "Memories Diary Slack App",
   "main": "app.js",
   "scripts": {
     "ngrok": "ngrok http 3000",
@@ -10,6 +10,11 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@slack/bolt": "^2.3.0"
+    "@slack/bolt": "^2.7.0",
+    "@vendia/serverless-express": "^4.3.7",
+    "dotenv": "^10.0.0"
+  },
+  "devDependencies": {
+    "serverless-offline": "^7.0.0"
   }
 }
