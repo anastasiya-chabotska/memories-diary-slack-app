@@ -1,6 +1,9 @@
 require("dotenv").config();
 const { App, ExpressReceiver } = require("@slack/bolt");
 const serverlessExpress = require("@vendia/serverless-express");
+var Sequelize = require("sequelize");
+var db = require("./db");
+var { Memory } = require("./db");
 
 const expressReceiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
@@ -238,6 +241,9 @@ app.view("view_1", async ({ ack, body, view, client }) => {
   let mood = view.state.values.mood.mood.selected_option.text.text;
   let date = view.state.values.date.date.selected_date;
 
+  //save the data to a db
+  saveMemoryToDb({ title, description, users: people, mood_emoji: mood, date });
+
   let users = "";
   for (let i = 0; i < people.length; i++) {
     users += "<@" + people[i] + "> ";
@@ -286,9 +292,28 @@ app.view("view_1", async ({ ack, body, view, client }) => {
   }
 });
 
+async function saveMemoryToDb(obj) {
+  await Memory.create(obj);
+}
+
+// //test
+// let title = "Hello";
+// let description = "fndjkfbvrhkbvbkefr";
+// let people = ["anastasiya", "jamila"];
+// let mood = "sparkles";
+// let memory_date = "2021-04-01";
+
+// saveMemoryToDb({
+//   title,
+//   description,
+//   users: people,
+//   mood_emoji: mood,
+//   date: memory_date,
+// });
+
 (async () => {
   // Start your app
-  await app.start(process.env.PORT || 8080);
+  await app.start(process.env.PORT || 3000);
 
   console.log("⚡️ Bolt app is running!");
 })();
