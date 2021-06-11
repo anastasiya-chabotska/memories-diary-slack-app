@@ -4,6 +4,9 @@ const serverlessExpress = require("@vendia/serverless-express");
 var Sequelize = require("sequelize");
 var db = require("./db");
 var { Memory } = require("./db");
+const { Op } = require("sequelize");
+
+let numOfResultsToShow;
 
 const expressReceiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
@@ -14,6 +17,219 @@ const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   receiver: expressReceiver,
 });
+
+//construct blocks to be viewed in app home here
+async function createBlocks(user, number) {
+  let memories = await findMemories(user);
+  // console.log(memories);
+  let memoriesCount = await countMemories(user);
+  // console.log("Total Memories: " + memoriesCount);
+
+  let blocks = new Array();
+  blocks.push(
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*Welcome home <@${user}>, :sparkles:* `,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "To use the Memories Diary App just type */memory* in any channel and fill out the form. All memories can be found in channel #memories \n\nBelow you will find most recents memories in which you were tagged",
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `We found *${memoriesCount} Memories* with you`,
+      },
+
+      accessory: {
+        type: "overflow",
+        options: [
+          {
+            text: {
+              type: "plain_text",
+              emoji: true,
+              text: "Newest First",
+            },
+            value: "ASC",
+          },
+          {
+            text: {
+              type: "plain_text",
+              emoji: true,
+              text: "Oldest",
+            },
+            value: "DESC",
+          },
+        ],
+        action_id: "filter",
+      },
+    },
+
+    {
+      type: "divider",
+    }
+  );
+
+  console.log(number);
+  let loop;
+  if (number < memoriesCount) {
+    loop = number;
+  } else {
+    loop = memoriesCount;
+  }
+
+  for (let i = 0; i < loop; i++) {
+    let users = "";
+    for (let j = 0; j < memories[i].users.length; j++) {
+      users += `<@${memories[i].users[j]}> `;
+    }
+
+    blocks.push(
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*<fakeLink.toHotelPage.com|${memories[i].title}>*\n${memories[i].mood_emoji}\non ${memories[i].date}\nwith users \n${users}\n${memories[i].description}`,
+        },
+        accessory: {
+          type: "image",
+          image_url:
+            "https://api.slack.com/img/blocks/bkb_template_images/tripAgent_1.png",
+          alt_text: "Windsor Court Hotel thumbnail",
+        },
+      },
+      {
+        type: "divider",
+      }
+    );
+  }
+  if (number < memoriesCount) {
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            emoji: true,
+            text: "View More",
+          },
+          value: "click_me_123",
+          action_id: "showMore",
+        },
+      ],
+    });
+  } else {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "plain_text",
+        emoji: true,
+        text: "No more memories found :sweat:",
+      },
+    });
+  }
+
+  return { blocks, memoriesCount };
+}
+
+app.action("filter", async ({ body, ack, say }) => {
+  // Acknowledge the action
+  await ack();
+  console.log("FILTER");
+  console.log(body.actions[0].selected_option);
+});
+// Listen for users opening your App Home
+app.event("app_home_opened", async ({ event, client }) => {
+  numOfResultsToShow = 3;
+  let result = await await createBlocks(event.user, numOfResultsToShow);
+  let myBlocks = result.blocks;
+
+  console.log("NUMBER OF RESULTS TO SHOW", numOfResultsToShow);
+  let memoriesCount = result.memoriesCount;
+
+  try {
+    // Call views.publish with the built-in client
+    const result = await client.views.publish({
+      // Use the user ID associated with the event
+      user_id: event.user,
+      view: {
+        // Home tabs must be enabled in your app configuration page under "App Home"
+        type: "home",
+        callback_id: "homeView",
+        blocks: myBlocks,
+      },
+    });
+
+    console.log(result);
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+// Listen for a button invocation with action_id `button_abc` (assume it's inside of a modal)
+app.action("showMore", async ({ ack, body, client }) => {
+  console.log("Body");
+  console.log(body);
+  console.log(client.views);
+  let myBlocks = await (
+    await createBlocks(body.user.id, numOfResultsToShow + 3)
+  ).blocks;
+  numOfResultsToShow += 3;
+  // Acknowledge the button request
+  await ack();
+
+  try {
+    // Call views.update with the built-in client
+    const result = await client.views.update({
+      // Pass the view_id
+      view_id: body.view.id,
+      // Pass the current hash to avoid race conditions
+      // hash: body.view.hash,
+      // View payload with updated blocks
+      user_id: body.user.id,
+      view: {
+        type: "home",
+        // View identifier
+        callback_id: "showingMore",
+        title: {
+          type: "plain_text",
+          text: "Updated modal",
+        },
+        blocks: myBlocks,
+      },
+    });
+    console.log(result);
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+async function findMemories(userId) {
+  let memories = await Memory.findAll({
+    where: {
+      users: { [Op.contains]: [userId] },
+    },
+    order: [["date", "DESC"]],
+    //this gets rid of previousdata values that appeared after ordering
+    // raw: true,
+  });
+  return memories;
+}
+
+async function countMemories(userId) {
+  let memoriesCount = await Memory.count({
+    where: { users: { [Op.contains]: [userId] } },
+  });
+  return memoriesCount;
+}
 
 app.message("goodbye", async ({ message, say, client }) => {
   await say(`See you later, <@${message.user}> :wave:`);
