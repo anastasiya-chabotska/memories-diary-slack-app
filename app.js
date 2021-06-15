@@ -6,7 +6,10 @@ var db = require("./db");
 var { Memory } = require("./db");
 const { Op } = require("sequelize");
 
+//global variable here to keep track of how many memories should be shown based on button click
 let numOfResultsToShow;
+//order of results my default is descending
+let order;
 
 const expressReceiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
@@ -31,7 +34,7 @@ async function createBlocks(user, number) {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*Welcome home <@${user}>, :sparkles:* `,
+        text: `*Welcome home, <@${user}> :sparkles:* `,
       },
     },
     {
@@ -45,7 +48,7 @@ async function createBlocks(user, number) {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `We found *${memoriesCount} Memories* with you`,
+        text: `Click here to sort by most/least recent memories :arrow_right:\n\nWe found *${memoriesCount} Memories* with you\n\n`,
       },
 
       accessory: {
@@ -55,7 +58,7 @@ async function createBlocks(user, number) {
             text: {
               type: "plain_text",
               emoji: true,
-              text: "Newest First",
+              text: "Oldest First",
             },
             value: "ASC",
           },
@@ -63,12 +66,12 @@ async function createBlocks(user, number) {
             text: {
               type: "plain_text",
               emoji: true,
-              text: "Oldest",
+              text: "Newest First",
             },
             value: "DESC",
           },
         ],
-        action_id: "filter",
+        action_id: "order",
       },
     },
 
@@ -77,7 +80,8 @@ async function createBlocks(user, number) {
     }
   );
 
-  console.log(number);
+  //number is the amount of memeroies to be shown
+
   let loop;
   if (number < memoriesCount) {
     loop = number;
@@ -86,6 +90,7 @@ async function createBlocks(user, number) {
   }
 
   for (let i = 0; i < loop; i++) {
+    //construct users string to be properly displayed
     let users = "";
     for (let j = 0; j < memories[i].users.length; j++) {
       users += `<@${memories[i].users[j]}> `;
@@ -96,13 +101,41 @@ async function createBlocks(user, number) {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*<fakeLink.toHotelPage.com|${memories[i].title}>*\n${memories[i].mood_emoji}\non ${memories[i].date}\nwith users \n${users}\n${memories[i].description}`,
+          text: `*${memories[i].title}*${memories[i].mood_emoji}\n`,
         },
+        // accessory: {
+        //   type: "image",
+        //   image_url:
+        //     "https://api.slack.com/img/blocks/bkb_template_images/tripAgent_1.png",
+        //   alt_text: "Windsor Court Hotel thumbnail",
+        // },
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `on ${memories[i].date} \nwith ${users}`,
+          },
+        ],
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `${memories[i].description}`,
+        },
+
         accessory: {
-          type: "image",
-          image_url:
-            "https://api.slack.com/img/blocks/bkb_template_images/tripAgent_1.png",
-          alt_text: "Windsor Court Hotel thumbnail",
+          type: "button",
+          text: {
+            type: "plain_text",
+            emoji: true,
+            text: "Delete Memory",
+          },
+          style: "danger",
+          value: `${memories[i].id}`,
+          action_id: "deleteButton",
         },
       },
       {
@@ -110,6 +143,8 @@ async function createBlocks(user, number) {
       }
     );
   }
+
+  //if there are more memories left, leave the button "show more"
   if (number < memoriesCount) {
     blocks.push({
       type: "actions",
@@ -126,7 +161,9 @@ async function createBlocks(user, number) {
         },
       ],
     });
-  } else {
+  }
+  //otherwise, display that there are no more memories to show
+  else {
     blocks.push({
       type: "section",
       text: {
@@ -140,20 +177,95 @@ async function createBlocks(user, number) {
   return { blocks, memoriesCount };
 }
 
-app.action("filter", async ({ body, ack, say }) => {
-  // Acknowledge the action
+app.action("deleteButton", async ({ body, ack, say, client }) => {
   await ack();
-  console.log("FILTER");
-  console.log(body.actions[0].selected_option);
-});
-// Listen for users opening your App Home
-app.event("app_home_opened", async ({ event, client }) => {
-  numOfResultsToShow = 3;
-  let result = await await createBlocks(event.user, numOfResultsToShow);
+  console.log("BUTTON BODY" + JSON.stringify(body.actions[0]));
+  let memoryToBeDeleted = await Memory.findByPk(body.actions[0].value);
+  console.log(memoryToBeDeleted);
+  await memoryToBeDeleted.destroy();
+  try {
+    let response = await client.chat.delete({
+      channel: memoryToBeDeleted.channel,
+      ts: memoryToBeDeleted.message_ts,
+    });
+    console.log(response);
+  } catch (error) {
+    console.log(error);
+  }
+
+  //construct blocks
+  let result = await await createBlocks(body.user.id, numOfResultsToShow);
+  //previous function returns blocks and memories count
   let myBlocks = result.blocks;
 
   console.log("NUMBER OF RESULTS TO SHOW", numOfResultsToShow);
-  let memoriesCount = result.memoriesCount;
+
+  try {
+    // Call views.publish with the built-in client
+    const result = await client.views.publish({
+      // Use the user ID associated with the event
+      user_id: body.user.id,
+      view: {
+        // Home tabs must be enabled in your app configuration page under "App Home"
+        type: "home",
+        callback_id: "homeView",
+        blocks: myBlocks,
+      },
+    });
+
+    console.log(result);
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+//the user clicked on the overflow to sort memories
+app.action("order", async ({ body, ack, say, client }) => {
+  // Acknowledge the action
+  await ack();
+  console.log("BODY");
+  console.log(body);
+  console.log("ORDER");
+  console.log(body.actions[0].selected_option);
+  order = body.actions[0].selected_option.value;
+
+  //construct blocks
+  let result = await await createBlocks(body.user.id, numOfResultsToShow);
+  //previous function returns blocks and memories count
+  let myBlocks = result.blocks;
+
+  console.log("NUMBER OF RESULTS TO SHOW", numOfResultsToShow);
+
+  try {
+    // Call views.publish with the built-in client
+    const result = await client.views.publish({
+      // Use the user ID associated with the event
+      user_id: body.user.id,
+      view: {
+        // Home tabs must be enabled in your app configuration page under "App Home"
+        type: "home",
+        callback_id: "homeView",
+        blocks: myBlocks,
+      },
+    });
+
+    console.log(result);
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+// Listen for users opening your App Home
+app.event("app_home_opened", async ({ event, client }) => {
+  order = "DESC";
+  //initiallly show 3 most/least recent memories
+  numOfResultsToShow = 3;
+  //construct blocks for that 3 memories
+  let result = await await createBlocks(event.user, numOfResultsToShow);
+  //previous function returns blocks and memories count
+  let myBlocks = result.blocks;
+
+  // console.log("NUMBER OF RESULTS TO SHOW", numOfResultsToShow);
 
   try {
     // Call views.publish with the built-in client
@@ -174,14 +286,13 @@ app.event("app_home_opened", async ({ event, client }) => {
   }
 });
 
-// Listen for a button invocation with action_id `button_abc` (assume it's inside of a modal)
+// Listen for a button invocation with action_id `showMore`
 app.action("showMore", async ({ ack, body, client }) => {
-  console.log("Body");
-  console.log(body);
-  console.log(client.views);
+  //increase the number of results to be shown by 3
   let myBlocks = await (
     await createBlocks(body.user.id, numOfResultsToShow + 3)
   ).blocks;
+  //increse by 3 for the next button click
   numOfResultsToShow += 3;
   // Acknowledge the button request
   await ack();
@@ -201,7 +312,7 @@ app.action("showMore", async ({ ack, body, client }) => {
         callback_id: "showingMore",
         title: {
           type: "plain_text",
-          text: "Updated modal",
+          text: "Updated home view",
         },
         blocks: myBlocks,
       },
@@ -212,18 +323,20 @@ app.action("showMore", async ({ ack, body, client }) => {
   }
 });
 
+//find memories associated with user in the db
 async function findMemories(userId) {
   let memories = await Memory.findAll({
     where: {
       users: { [Op.contains]: [userId] },
     },
-    order: [["date", "DESC"]],
+    order: [["date", order]],
     //this gets rid of previousdata values that appeared after ordering
     // raw: true,
   });
   return memories;
 }
 
+//count how many memories in total the user has in the db
 async function countMemories(userId) {
   let memoriesCount = await Memory.count({
     where: { users: { [Op.contains]: [userId] } },
@@ -262,7 +375,7 @@ app.message("hello", async ({ message, say }) => {
 app.action("button_click", async ({ body, ack, say }) => {
   // Acknowledge the action
   await ack();
-  console.log(body);
+
   await say(`<@${body.user.id}> clicked the button`);
 });
 
@@ -419,7 +532,7 @@ app.command("/memory", async ({ ack, body, client }) => {
             block_id: "date",
             element: {
               type: "datepicker",
-              initial_date: "1990-04-28",
+              // initial_date: "1990-04-28",
               placeholder: {
                 type: "plain_text",
                 text: "Select a date",
@@ -457,8 +570,8 @@ app.view("view_1", async ({ ack, body, view, client }) => {
   let mood = view.state.values.mood.mood.selected_option.text.text;
   let date = view.state.values.date.date.selected_date;
 
-  //save the data to a db
-  saveMemoryToDb({ title, description, users: people, mood_emoji: mood, date });
+  let channel;
+  let ts;
 
   let users = "";
   for (let i = 0; i < people.length; i++) {
@@ -502,12 +615,40 @@ app.view("view_1", async ({ ack, body, view, client }) => {
         },
       ],
     });
-    console.log(response);
+    console.log(
+      "RESPONSE AFTER MESSAGE WAS POSTED" +
+        response.channel +
+        response.message.ts
+    );
+    channel = response.channel;
+    ts = response.message.ts;
   } catch (error) {
     console.log(error);
   }
+
+  //save the data to a db
+  saveMemoryToDb({
+    title,
+    description,
+    users: people,
+    mood_emoji: mood,
+    date,
+    channel,
+    message_ts: ts,
+  });
+
+  // try {
+  //   let response = await client.chat.delete({
+  //     channel,
+  //     ts,
+  //   });
+  //   console.log(response);
+  // } catch (error) {
+  //   console.log(error);
+  // }
 });
 
+//save new memory to the db
 async function saveMemoryToDb(obj) {
   await Memory.create(obj);
 }

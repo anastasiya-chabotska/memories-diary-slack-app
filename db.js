@@ -10,6 +10,8 @@ const Memory = db.define("memory", {
   description: Sequelize.TEXT,
   mood_emoji: Sequelize.STRING,
   date: Sequelize.STRING,
+  channel: Sequelize.STRING,
+  message_ts: Sequelize.STRING,
 });
 
 const syncDb = () => db.sync();
